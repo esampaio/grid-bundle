@@ -8,6 +8,8 @@ use Doctrine\ORM\QueryBuilder;
 use DoctrineExtensions\Paginate\Paginate;
 
 use Symfony\Component\HttpFoundation\Response;
+use PedroTeixeira\Bundle\GridBundle\Grid\Encoder\JsonEncoder;
+use PedroTeixeira\Bundle\GridBundle\Grid\Encoder\CsvEncoder;
 
 /**
  * Grid Abstract
@@ -102,6 +104,12 @@ abstract class GridAbstract
         $this->fileHash = $this->request->query->get('file_hash', null);
         if (is_null($this->fileHash)) {
             $this->fileHash = uniqid();
+        }
+
+        if ($this->isExport()) {
+            $this->encoder = new CsvEncoder($this->container);
+        } else {
+            $this->encoder = new JsonEncoder($this->container);
         }
 
         $now = new \DateTime();
@@ -323,8 +331,7 @@ abstract class GridAbstract
             $this->getQueryBuilder()->orderBy($sortIndex, $sortOrder);
         }
 
-        // Don't process grid for export
-        if (!$this->isExport()) {
+        if ($this->encoder->supportsPagination()) {
             $totalCount = Paginate::count($this->getQueryBuilder()->getQuery());
 
             $totalPages = ceil($totalCount / $limit);
@@ -351,61 +358,6 @@ abstract class GridAbstract
             );
         }
 
-        foreach ($this->getQueryBuilder()->getQuery()->getResult() as $key => $row) {
-
-            $rowValue = array();
-
-            /** @var Column $column */
-            foreach ($this->columns as $column) {
-
-                if ($column->getExportOnly() && !$this->isExport()) {
-                    continue;
-                }
-
-                $rowColumn = ' ';
-
-                // Array
-                if (array_key_exists($column->getField(), $row)) {
-
-                    $rowColumn = $row[$column->getField()];
-
-                // Array scalar
-                } else if (array_key_exists(0, $row) && array_key_exists($column->getField(), $row[0])) {
-
-                    $rowColumn = $row[0][$column->getField()];
-
-                // Object
-                } else if (method_exists($row, 'get' . ucfirst($column->getField()))) {
-
-                    $method = 'get' . ucfirst($column->getField());
-                    $rowColumn = $row->$method();
-
-                // Object scalar
-                } else if (array_key_exists(0, $row) && method_exists($row[0], 'get' . ucfirst($column->getField()))) {
-
-                    $method = 'get' . ucfirst($column->getField());
-                    $rowColumn = $row[0]->$method();
-
-                // Array
-                } else if ($column->getTwig()) {
-
-                    $rowColumn = $this->templating->render(
-                        $column->getTwig(),
-                        array(
-                            'row' => $row
-                        )
-                    );
-                }
-
-                $rowValue[$column->getField()] = $column->getRender()
-                    ->setValue($rowColumn)
-                    ->setStringOnly($this->isExport())
-                    ->render();
-            }
-
-            $response['rows'][$key] = $rowValue;
-        }
-
         return $response;
     }
 
@@ -414,7 +366,11 @@ abstract class GridAbstract
      */
     public function processGrid()
     {
-        return $this->getData();
+        $response = $this->getData();
+
+        $response['rows'] = $this->encoder->setColumns($this->columns)->setQueryBuilder($this->getQueryBuilder())->encode();
+
+        return $response;
     }
 
     /**
@@ -423,38 +379,10 @@ abstract class GridAbstract
     public function processExport()
     {
         set_time_limit(0);
+        $this->getData();
+        $content = $this->encoder->setColumns($this->columns)->setQueryBuilder($this->getQueryBuilder())->encode();
 
-        $exportFile = $this->getExportFileName();
-
-        $fileHandler = fopen($exportFile, 'w');
-
-        $columnsHeader = array();
-
-        /** @var Column $column */
-        foreach ($this->getColumns() as $column) {
-            if (!$column->getTwig()) {
-                $columnsHeader[$column->getField()] = $column->getName();
-            }
-        }
-
-        fputcsv($fileHandler, $columnsHeader);
-
-        $data = $this->getData();
-
-        foreach ($data['rows'] as $row) {
-
-            $rowContent = array();
-
-            foreach ($row as $key => $column) {
-                if (isset($columnsHeader[$key])) {
-                    $rowContent[] = $column;
-                }
-            }
-
-            fputcsv($fileHandler, $rowContent);
-        }
-
-        fclose($fileHandler);
+        file_put_contents($this->getExportFileName(), $content);
 
         return array(
             'file_hash' => $this->fileHash
@@ -469,17 +397,12 @@ abstract class GridAbstract
      */
     public function render()
     {
+        if ($this->isExport() && !$this->getExportable()) {
+            throw new \Exception('Export not allowed');
+        }
+
         if ($this->isAjax()) {
-            if ($this->isExport()) {
-
-                if (!$this->getExportable()) {
-                    throw new \Exception('Export not allowed');
-                }
-
-                $data = $this->processExport();
-            } else {
-                $data = $this->processGrid();
-            }
+            $data = ($this->isExport()) ? $this->processExport() : $this->processGrid();
 
             $json = json_encode($data);
 
@@ -490,15 +413,10 @@ abstract class GridAbstract
             return $response;
         } else {
             if ($this->isExport()) {
-
-                if (!$this->getExportable()) {
-                    throw new \Exception('Export not allowed');
-                }
-
                 $exportFile = $this->getExportFileName();
 
                 $response = new Response();
-                $response->headers->set('Content-Type', 'text/csv');
+                $response->headers->set('Content-Type', $this->encoder->getMimeType());
                 $response->headers->set('Content-Disposition', 'attachment; filename="' . basename($exportFile) . '"');
                 $response->setContent(file_get_contents($exportFile));
 
