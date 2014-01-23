@@ -145,6 +145,7 @@
         , gridLock:function () {
             this.$element.find('input, select, textarea, button').attr('disabled', true)
             this.$element.css({opacity:0.5});
+            this.$element.find('.spinner').show();
 
             return this
         }
@@ -152,6 +153,7 @@
         , gridUnlock:function () {
             this.$element.find('input, select, textarea, button').attr('disabled', false)
             this.$element.css({opacity:1});
+            this.$element.find('.spinner').hide();
 
             return this
         }
