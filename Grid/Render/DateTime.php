@@ -14,6 +14,10 @@ class DateTime extends RenderAbstract
      */
     public function render()
     {
+        if (gettype($this->getValue()) == 'string') {
+            $this->setValue(new \DateTime($this->getValue()));
+        }
+
         if ($this->getValue() instanceof \DateTime) {
 
             $transformer = new FullTransformer(
@@ -23,5 +27,7 @@ class DateTime extends RenderAbstract
 
             return $transformer->format($this->getValue());
         }
+
+        return $this->getValue();
     }
 }
