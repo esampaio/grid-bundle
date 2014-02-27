@@ -332,7 +332,8 @@ abstract class GridAbstract
         }
 
         if ($this->encoder->supportsPagination()) {
-            $totalCount = Paginate::count($this->getQueryBuilder()->getQuery());
+            $queryBuilder = clone $this->getQueryBuilder();
+            $totalCount = Paginate::count($queryBuilder->having('1=1')->getQuery());
 
             $totalPages = ceil($totalCount / $limit);
             $totalPages = ($totalPages <= 0 ? 1 : $totalPages);
